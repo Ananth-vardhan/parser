@@ -1088,9 +1088,50 @@ class RefreshTrigger:
        return request_cache[request_hash]
    ```
 
----
+ ---
 
-### Risks & Open Questions
+ ### Comparison & Recommendations
+
+ #### Alignment with Parser Vision vs. Parse.bot Execution
+ - **Parser stated goals (README + internal plan):** Deliver an intelligent, Flask-based orchestrator that lets users describe complex, dynamic web extractions in natural language, leverage OpenAI/Gemini for reasoning, and evolve toward the documented Phase 1 → Phase 2 workflow (LLM-led discovery followed by cached replay with selector/DOM re-use).
+ - **Parse.bot execution pattern:** Ships a FastAPI + AWS Lambda architecture with a dedicated `/scraper/{id}/query` prompt orchestration surface, Cloudflare ingress, proxy-pool intelligence, and multi-layer caching, allowing them to keep LLM calls off the critical path for repeat runs (see [API Architecture](#api-architecture)).
+
+ #### Similarities
+ - Both platforms anchor on **natural-language-to-structured-data** flows, combining user intent with LLM reasoning before issuing deterministic scrapers (README + [API Endpoints](#api-endpoints)).
+ - Each relies on **Python microservices fronted by CDN/edge infrastructure** to expose REST APIs for scraper orchestration ([Executive Summary](#executive-summary)).
+ - Both roadmaps embrace a **two-phase model**: high-cost AI exploration followed by low-latency cached executions, as evidenced by our internal plan and Parse.bot’s inferred cache/selector reuse strategy ([Technical Comparison](#technical-comparison-parsebot-vs-our-parser-implementation)).
+
+ #### Key Differences & Gaps
+ - **Caching maturity:** Parse.bot already combines Redis + PostgreSQL selector storage, DOM fingerprinting, and automatic invalidation, while parser still relies on in-memory, session-scoped state.
+ - **Prompt orchestration:** Parse.bot exposes a dedicated natural-language endpoint with contextual prompt pipelines, whereas parser currently plans to embed prompting ad-hoc inside request handlers.
+ - **Agent/worker coordination:** Parse.bot separates orchestration, AI reasoning, and Lambda workers with queue-like dispatch, while parser still operates as a single Flask process without autonomous agents or background runners.
+ - **Operational telemetry:** Parse.bot surfaces proxy-pool health and build metadata publicly; parser lacks equivalent observability for cache health, proxy rotation, or selector accuracy.
+
+ #### Reusable Patterns & Opportunity Areas
+ | Theme | Parse.bot Tactic (Evidence) | Parser Readiness | Opportunity |
+ |-------|-----------------------------|------------------|-------------|
+ | Prompt orchestration & context management | `/scraper/{id}/query` endpoint brokers user queries into structured prompts with metadata ([API Endpoints](#api-endpoints)) | Early design only | Introduce a prompt service that versions templates, stores conversation memory, and injects system hints before calling OpenAI/Gemini. |
+ | Cache layering & selector reuse | Multi-layer cache (Redis selectors + Postgres metadata, DOM hashes, TTLs) per [Technical Comparison](#technical-comparison-parsebot-vs-our-parser-implementation) | In-memory cache | Build Redis/PG-backed selector store with TTL + diff checks to unlock Phase 2 performance. |
+ | Agent coordination & execution path | FastAPI orchestrator hands jobs to AWS Lambda workers through a queue-like dispatch ([API Architecture](#api-architecture)) | Single Flask app | Stand up a lightweight task queue (Celery/SQS/Lambda) to isolate scraping agents and allow parallel runs. |
+ | Proxy intelligence & request memoization | `/proxy-pool/status` + request hashing guard against bad exits and duplicate fetches ([Proxy Infrastructure](#proxy-infrastructure)) | Basic proxy rotation | Instrument proxy pool health, cache successful request hashes, and bias toward known-good routes. |
+
+ #### Prioritized Recommendations
+ | Priority | Recommendation | Rationale (Parse.bot Signal) | Expected Impact |
+ |----------|----------------|------------------------------|-----------------|
+ | P0 | **Implement a persistent selector/cache service (Redis + Postgres metadata) with TTL, DOM hashes, and schema versioning.** | Parse.bot’s cache reuse keeps LLM calls off repeat runs, highlighting how much we overpay without persistence. | 30–60% latency reduction for Phase 2, lower LLM spend, enables automated staleness checks. |
+ | P0 | **Create a prompt orchestration microservice mirroring `/scraper/{id}/query` semantics.** | Their dedicated endpoint suggests templates, context windows, and conversation state are first-class; we currently couple prompts to handlers. | Higher extraction accuracy, safer prompt evolution, easier experimentation with OpenAI vs. Gemini strategies. |
+ | P1 | **Introduce a queue-driven worker/agent tier (Celery/SQS/AWS Lambda) to separate orchestration from execution.** | Parse.bot’s FastAPI → Lambda split prevents long-running work on the API thread and simplifies proxy + session reuse. | Improves reliability, unlocks concurrent runs, and prepares us for multi-agent experimentation. |
+ | P1 | **Instrument proxy pool + request memoization telemetry (health endpoint, dedupe cache, alerting).** | Their `/proxy-pool/status` plus request hashing indicate disciplined traffic management that we lack. | Reduces scrape failures, accelerates troubleshooting, and feeds cache hit-rate dashboards. |
+
+ #### Actionable Next Steps
+ 1. **Cache persistence spike:** Prototype a Redis selector cache with Postgres metadata, measuring hit/miss ratios on two representative scrapers (ties directly to the gaps noted in [Technical Comparison](#technical-comparison-parsebot-vs-our-parser-implementation)).
+ 2. **Prompt orchestration experiment:** Draft a `/scraper/<id>/query` equivalent inside Flask that records prompts, system instructions, and tool outputs, then A/B test OpenAI vs. Gemini prompt packs ([API Endpoints](#api-endpoints)).
+ 3. **Worker coordination design doc:** Outline an API-to-queue-to-worker flow (FastAPI/Flask → Celery or Lambda) that mirrors Parse.bot’s orchestrator-to-Lambda split ([API Architecture](#api-architecture)), including how agents share proxy/session state.
+ 4. **Proxy & telemetry upgrade:** Add a proxy health surface plus request dedupe cache, ensuring we collect metrics needed for the memoization + caching recommendations ([Proxy Infrastructure](#proxy-infrastructure)).
+
+ ---
+
+ ### Risks & Open Questions
 
 #### ⚠️ Key Risks
 
