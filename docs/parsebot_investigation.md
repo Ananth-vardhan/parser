@@ -95,43 +95,110 @@ curl -I "https://api.parse.bot"
 
 ### System Architecture Diagram
 
+```mermaid
+graph TD
+    User[User/Client] -->|HTTPS/JSON| CDN[Cloudflare CDN]
+    CDN -->|Load Balancing| API[FastAPI Orchestrator]
+    
+    subgraph "Parse.bot Platform"
+        API -->|Dispatch Job| Queue[Job Queue / Broker]
+        API -->|Query/Prompt| AI[AI Reasoning Engine]
+        API -->|Read/Write Config| DB[(Metadata Store)]
+        
+        Queue -->|Trigger| Worker[AWS Lambda Workers]
+        
+        Worker -->|Rotate IP| Proxy[Proxy Pool]
+        Worker -->|Extract Data| Target[Target Website]
+        Worker -->|Store Result| Storage[(Results Storage)]
+        
+        AI -.->|OpenAI/Gemini API| LLM[External LLM Providers]
+    end
+    
+    subgraph "External Infrastructure"
+        Proxy -->|HTTP/S| Target
+        LLM
+    end
 ```
-┌─────────────────┐
-│   User/Client   │
-└────────┬────────┘
-         │
-         ▼
-┌─────────────────────────────┐
-│   Cloudflare CDN/WAF        │
-│   (Edge Layer)              │
-└────────────┬────────────────┘
-             │
-             ▼
-┌─────────────────────────────┐
-│   FastAPI Backend           │
-│   https://api.parse.bot     │
-│   ┌───────────────────────┐ │
-│   │ Route Handlers        │ │
-│   │ - Health Check        │ │
-│   │ - Scraper Execution   │ │
-│   │ - Query Processing    │ │
-│   │ - Proxy Management    │ │
-│   └───────────────────────┘ │
-└────────────┬────────────────┘
-             │
-             ├──────────────────┐
-             ▼                  ▼
-    ┌────────────────┐  ┌─────────────┐
-    │  AWS Lambda    │  │ Proxy Pool  │
-    │  Workers       │  │ (Oxylabs)   │
-    │  (Scrapers)    │  │ 20 proxies  │
-    └────────────────┘  └─────────────┘
-             │
-             ▼
-    ┌────────────────┐
-    │  Target Sites  │
-    └────────────────┘
+
+### Core Subsystems
+
+#### 1. Ingestion Layer
+*   **Responsibilities:** Entry point for all client requests, authentication validation, rate limiting, and request routing.
+*   **Components:** Cloudflare CDN (Edge), FastAPI Backend.
+*   **Rationale:** Cloudflare handles DDoS protection and SSL. FastAPI provides a high-performance, async Python web framework suitable for I/O-bound operations.
+
+#### 2. Orchestration Layer (FastAPI)
+*   **Responsibilities:** Request lifecycle management, job dispatching, AI interaction coordination.
+*   **Interactions:** Receives requests from Ingestion, queries the AI Reasoning engine for scraper generation/adaptation, and dispatches execution tasks to the worker layer.
+
+#### 3. AI Reasoning Engine
+*   **Responsibilities:** Interpreting natural language queries, generating CSS/XPath selectors, and adapting to site layout changes.
+*   **Components:** Integrated Python module within FastAPI, communicating with OpenAI and Gemini APIs.
+*   **Interactions:** `POST /scraper/{id}/query` triggers this subsystem to translate user intent into executable scraping logic.
+
+#### 4. Scraping Workers (Execution)
+*   **Responsibilities:** Executing the actual scraping logic, managing browser contexts (if headless), and handling proxy rotation.
+*   **Components:** AWS Lambda functions.
+*   **Rationale:** Lambda allows for high scalability and ephemeral environments, perfect for bursty scraping workloads.
+*   **Interactions:** Triggered by the Orchestrator (likely via AWS EventBridge or direct invocation), they utilize the Proxy Pool to access Target Sites.
+
+#### 5. Storage Layer
+*   **Responsibilities:** Persisting scraper configurations, user sessions, and scraped data.
+*   **Components:** 
+    *   **Metadata Store:** (Inferred: PostgreSQL/DynamoDB) for scraper rules and user info.
+    *   **Results Storage:** (Inferred: S3/Blob Storage) for large scraped datasets.
+*   **Assumptions:** Separation of hot data (config) and cold data (results).
+
+#### 6. Delivery Channels
+*   **Responsibilities:** returning data to the user.
+*   **Methods:** Synchronous API response (for small datasets) or asynchronous retrieval (implied by job ID patterns in similar systems, though current API shows direct response for synchronous endpoints).
+
+#### 7. Proxy Infrastructure
+*   **Responsibilities:** IP rotation and anonymity.
+*   **Components:** Managed pool of Oxylabs ISP and Direct IP proxies.
+
+### Data Flow & Component Interaction
+
+**Scenario: Natural Language Scraper Generation & Execution**
+
+```mermaid
+sequenceDiagram
+    participant U as User
+    participant API as FastAPI Orchestrator
+    participant AI as AI Engine (LLM)
+    participant DB as Metadata Store
+    participant W as Lambda Worker
+    participant P as Proxy Pool
+    participant T as Target Site
+
+    Note over U, API: Phase 1: Definition
+    U->>API: POST /scraper/{id}/query (Natural Language)
+    API->>AI: Send Prompt + Context
+    AI->>AI: Generate Selectors/Logic
+    AI-->>API: Return Configuration
+    API->>DB: Save Scraper Config
+    API-->>U: Confirm Update
+
+    Note over U, API: Phase 2: Execution
+    U->>API: POST /scraper/{id}/run
+    API->>DB: Fetch Config
+    DB-->>API: Config
+    API->>W: Invoke Worker (Async/Sync)
+    W->>P: Request Proxy
+    P-->>W: Proxy Info
+    W->>T: HTTP Request (via Proxy)
+    T-->>W: HTML Content
+    W->>W: Apply Extraction Logic
+    W-->>API: Return Structured Data
+    API-->>U: JSON Response
 ```
+
+### Assumptions, Unknowns, and Rationale
+
+*   **Assumption - Storage:** We assume a persistent database exists for scraper configurations because the `/scraper/{id}` endpoints imply state retrieval.
+*   **Assumption - AI Integration:** We infer OpenAI/Gemini usage based on the README. The "AI Reasoning Engine" is likely a logic layer within the Flask application that constructs prompts.
+*   **Unknown - Job Queue:** It is unclear if there is an explicit message broker (RabbitMQ/SQS) between FastAPI and Lambda, or if `boto3` direct invocation is used. We modeled it as "Dispatch Job" for generality.
+*   **Rationale - Architecture:** The separation of the Orchestrator (FastAPI) and Workers (Lambda) is a standard pattern for scalable scraping to prevent long-running blocking operations on the API server.
 
 ### Deployment Information
 
