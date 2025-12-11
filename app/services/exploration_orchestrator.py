@@ -19,15 +19,19 @@ class ExplorationOrchestrator:
     """Orchestrates multi-agent exploration sessions."""
     
     def __init__(self, session: ExplorationSession, browser_settings: Dict[str, Any], 
-                 logger: Optional[logging.Logger] = None):
+                 logger: Optional[logging.Logger] = None, gemini_api_key: Optional[str] = None,
+                 enable_ai: bool = True):
         self.session = session
         self.browser_settings = browser_settings
         self.logger = logger or logging.getLogger(__name__)
         
-        # Initialize agents
-        self.coordinator = CoordinatorAgent(session.session_id, logger)
+        # Get API key from browser settings if not provided
+        self.gemini_api_key = gemini_api_key or browser_settings.get("gemini_api_key")
+        
+        # Initialize agents with AI capabilities
+        self.coordinator = CoordinatorAgent(session.session_id, logger, enable_ai, self.gemini_api_key)
         self.browser_agent = BrowserAgent(session.session_id, browser_settings, logger)
-        self.analyst_agent = AnalystAgent(session.session_id, logger)
+        self.analyst_agent = AnalystAgent(session.session_id, logger, enable_ai, self.gemini_api_key)
         
         # State management
         self.is_running = False

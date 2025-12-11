@@ -12,18 +12,32 @@ from app.models.exploration_session import (
 class CoordinatorAgent:
     """Agent responsible for planning and coordinating exploration activities."""
     
-    def __init__(self, session_id: str, logger: Optional[logging.Logger] = None):
+    def __init__(self, session_id: str, logger: Optional[logging.Logger] = None, 
+                 enable_ai: bool = True, gemini_api_key: Optional[str] = None):
         self.session_id = session_id
         self.logger = logger or logging.getLogger(__name__)
         self.state = AgentState(role=AgentRole.COORDINATOR)
+        self.enable_ai = enable_ai
+        
+        # Initialize Gemini AI integration if enabled
+        if self.enable_ai:
+            try:
+                from app.services.gemini_integration import GeminiExplorationAssistant
+                self.gemini_assistant = GeminiExplorationAssistant(gemini_api_key, logger)
+                self.logger.info("CoordinatorAgent initialized with Gemini AI")
+            except Exception as e:
+                self.logger.warning(f"Failed to initialize Gemini AI: {e}")
+                self.gemini_assistant = None
+        else:
+            self.gemini_assistant = None
         
     def create_exploration_plan(self, url: str, objectives: str) -> Dict[str, Any]:
         """Create a structured plan for exploring the target URL."""
         self.state.status = "planning"
         self.state.current_task = "create_exploration_plan"
         
-        # Analyze objectives and create structured plan
-        plan = {
+        # Create basic structured plan
+        basic_plan = {
             "url": url,
             "objectives": objectives,
             "steps": self._break_down_objectives(objectives),
@@ -32,11 +46,37 @@ class CoordinatorAgent:
             "success_criteria": self._define_success_criteria(objectives)
         }
         
-        self.state.reasoning = f"Created exploration plan for {url} with {len(plan['steps'])} steps"
+        # Enhance with Gemini AI if available
+        if self.gemini_assistant:
+            try:
+                ai_plan = self.gemini_assistant.generate_exploration_plan(url, objectives, basic_plan)
+                if "error" not in ai_plan:
+                    # Merge AI insights with basic plan
+                    basic_plan["ai_enhanced"] = True
+                    basic_plan["ai_strategy"] = ai_plan.get("strategy", "")
+                    basic_plan["ai_challenges"] = ai_plan.get("challenges", [])
+                    basic_plan["ai_confidence"] = ai_plan.get("confidence", 0.8)
+                    basic_plan["ai_steps"] = ai_plan.get("steps", [])
+                    
+                    # Merge AI-generated steps with basic steps
+                    if ai_plan.get("steps"):
+                        basic_plan["steps"].extend(ai_plan["steps"])
+                    
+                    self.state.reasoning = f"Created AI-enhanced exploration plan for {url} with {len(basic_plan['steps'])} steps"
+                    self.logger.info("Enhanced plan with Gemini AI insights")
+                else:
+                    self.state.reasoning = f"Created basic exploration plan for {url} with {len(basic_plan['steps'])} steps (AI unavailable)"
+                    self.logger.warning("AI planning failed, using basic plan")
+            except Exception as e:
+                self.state.reasoning = f"Created basic exploration plan for {url} with {len(basic_plan['steps'])} steps (AI error: {str(e)})"
+                self.logger.error(f"AI enhancement failed: {e}")
+        else:
+            self.state.reasoning = f"Created exploration plan for {url} with {len(basic_plan['steps'])} steps"
+        
         self.state.status = "ready"
         self.state.current_task = None
         
-        return plan
+        return basic_plan
         
     def _break_down_objectives(self, objectives: str) -> List[Dict[str, Any]]:
         """Break down high-level objectives into actionable steps."""

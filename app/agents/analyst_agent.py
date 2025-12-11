@@ -12,19 +12,34 @@ from app.models.exploration_session import (
 class AnalystAgent:
     """Agent responsible for analyzing content and generating insights."""
     
-    def __init__(self, session_id: str, logger: Optional[logging.Logger] = None):
+    def __init__(self, session_id: str, logger: Optional[logging.Logger] = None,
+                 enable_ai: bool = True, gemini_api_key: Optional[str] = None):
         self.session_id = session_id
         self.logger = logger or logging.getLogger(__name__)
         self.state = AgentState(role=AgentRole.ANALYST)
         self.analysis_results: List[Dict[str, Any]] = []
         self.key_findings: List[str] = []
+        self.enable_ai = enable_ai
+        
+        # Initialize Gemini AI integration if enabled
+        if self.enable_ai:
+            try:
+                from app.services.gemini_integration import GeminiExplorationAssistant
+                self.gemini_assistant = GeminiExplorationAssistant(gemini_api_key, logger)
+                self.logger.info("AnalystAgent initialized with Gemini AI")
+            except Exception as e:
+                self.logger.warning(f"Failed to initialize Gemini AI: {e}")
+                self.gemini_assistant = None
+        else:
+            self.gemini_assistant = None
         
     def analyze_page_content(self, content: Dict[str, Any]) -> Dict[str, Any]:
         """Analyze extracted page content and generate insights."""
         self.state.status = "analyzing_content"
         self.state.current_task = "analyze_page_content"
         
-        analysis = {
+        # Create basic analysis
+        basic_analysis = {
             "content_type": self._identify_content_type(content),
             "structure_analysis": self._analyze_structure(content),
             "key_elements": self._extract_key_elements(content),
@@ -33,13 +48,43 @@ class AnalystAgent:
             "recommendations": self._generate_recommendations(content)
         }
         
-        self.analysis_results.append(analysis)
+        # Enhance with Gemini AI if available
+        if self.gemini_assistant:
+            try:
+                # Determine analysis type based on content
+                content_str = str(content).lower()
+                if any(keyword in content_str for keyword in ["password", "credit", "ssn", "personal"]):
+                    analysis_type = "sensitive_data"
+                elif any(keyword in content_str for keyword in ["form", "input", "table"]):
+                    analysis_type = "structure"
+                else:
+                    analysis_type = "general"
+                
+                ai_analysis = self.gemini_assistant.analyze_content_with_ai(str(content), analysis_type)
+                if "error" not in ai_analysis:
+                    basic_analysis["ai_enhanced"] = True
+                    basic_analysis["ai_insights"] = ai_analysis.get("insights", [])
+                    basic_analysis["ai_recommendations"] = ai_analysis.get("recommendations", [])
+                    basic_analysis["ai_confidence"] = ai_analysis.get("ai_confidence", 0.8)
+                    basic_analysis["risk_assessment"] = ai_analysis.get("risk_assessment", "unknown")
+                    
+                    # Merge AI insights with basic insights
+                    basic_analysis["insights"].extend(ai_analysis.get("insights", []))
+                    basic_analysis["recommendations"].extend(ai_analysis.get("recommendations", []))
+                    
+                    self.logger.info("Enhanced content analysis with Gemini AI")
+                else:
+                    self.logger.warning("AI content analysis failed, using basic analysis")
+            except Exception as e:
+                self.logger.error(f"AI content enhancement failed: {e}")
+        
+        self.analysis_results.append(basic_analysis)
         
         self.state.status = "completed"
-        self.state.reasoning = f"Content analysis completed with {len(analysis.get('insights', []))} insights generated"
+        self.state.reasoning = f"Content analysis completed with {len(basic_analysis.get('insights', []))} insights generated"
         self.state.last_action = "analyzed_page_content"
         
-        return analysis
+        return basic_analysis
         
     def analyze_screenshot(self, screenshot: ScreenshotMetadata) -> Dict[str, Any]:
         """Analyze a screenshot and generate visual insights."""
@@ -74,7 +119,8 @@ class AnalystAgent:
         self.state.status = "synthesizing"
         self.state.current_task = "synthesize_findings"
         
-        synthesis = {
+        # Create basic synthesis
+        basic_synthesis = {
             "summary": self._create_executive_summary(all_data),
             "key_findings": self._consolidate_key_findings(all_data),
             "data_extraction_results": self._summarize_data_extraction(all_data),
@@ -85,13 +131,48 @@ class AnalystAgent:
             "confidence_score": self._calculate_confidence_score(all_data)
         }
         
-        self.key_findings = synthesis["key_findings"]
+        # Enhance with Gemini AI if available
+        if self.gemini_assistant:
+            try:
+                # Prepare findings for AI synthesis
+                findings_list = []
+                for analysis in self.analysis_results:
+                    if "insights" in analysis:
+                        findings_list.extend([{"type": "insight", "content": insight} for insight in analysis["insights"]])
+                    if "key_elements" in analysis:
+                        findings_list.extend([{"type": "element", "content": str(elem)} for elem in analysis["key_elements"]])
+                
+                exploration_goals = all_data.get("objectives", "General exploration")
+                ai_synthesis = self.gemini_assistant.synthesize_findings_ai(findings_list, exploration_goals)
+                
+                if "error" not in ai_synthesis:
+                    basic_synthesis["ai_enhanced"] = True
+                    basic_synthesis["ai_executive_summary"] = ai_synthesis.get("executive_summary", "")
+                    basic_synthesis["ai_key_findings"] = ai_synthesis.get("key_findings", [])
+                    basic_synthesis["ai_confidence_score"] = ai_synthesis.get("confidence_score", 0.7)
+                    basic_synthesis["ai_recommendations"] = ai_synthesis.get("recommendations", [])
+                    
+                    # Merge AI findings with basic findings
+                    basic_synthesis["key_findings"].extend(ai_synthesis.get("key_findings", []))
+                    basic_synthesis["next_steps"].extend(ai_synthesis.get("recommendations", []))
+                    
+                    # Update confidence score to be higher if AI analysis was successful
+                    basic_synthesis["confidence_score"] = max(basic_synthesis["confidence_score"], 
+                                                            ai_synthesis.get("confidence_score", 0.7))
+                    
+                    self.logger.info("Enhanced findings synthesis with Gemini AI")
+                else:
+                    self.logger.warning("AI synthesis failed, using basic synthesis")
+            except Exception as e:
+                self.logger.error(f"AI synthesis enhancement failed: {e}")
+        
+        self.key_findings = basic_synthesis["key_findings"]
         
         self.state.status = "completed"
         self.state.reasoning = "Findings synthesis completed"
         self.state.last_action = "synthesized_findings"
         
-        return synthesis
+        return basic_synthesis
         
     def _identify_content_type(self, content: Dict[str, Any]) -> str:
         """Identify the type of content being analyzed."""
