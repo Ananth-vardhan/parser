@@ -146,6 +146,11 @@ class ExplorationSession:
     # Chat/messaging
     messages: List[Dict[str, Any]] = field(default_factory=list)
     
+    # Approval gates and scraper generation
+    approval_gates: List[Dict[str, Any]] = field(default_factory=list)
+    generated_scrapers: List[Dict[str, Any]] = field(default_factory=list)
+    current_scraper: Optional[Dict[str, Any]] = None
+    
     def to_dict(self) -> Dict[str, Any]:
         return {
             "session_id": self.session_id,
@@ -195,6 +200,9 @@ class ExplorationSession:
             "timeout_seconds": self.timeout_seconds,
             "enable_screenshots": self.enable_screenshots,
             "messages": self.messages,
+            "approval_gates": self.approval_gates,
+            "generated_scrapers": self.generated_scrapers,
+            "current_scraper": self.current_scraper,
         }
 
     def add_action_log(self, log: ActionLog) -> None:

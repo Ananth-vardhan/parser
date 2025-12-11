@@ -259,6 +259,151 @@ def get_session_screenshots(session_id: str) -> tuple[Response, int]:
     }), 200
 
 
+@api_bp.route("/exploration/sessions/<session_id>/generate-spec", methods=["POST"], strict_slashes=False)
+def generate_specification(session_id: str) -> tuple[Response, int]:
+    """Generate scraper specification from exploration logs."""
+    settings = current_app.config["SETTINGS"]
+    exploration_service = ExplorationService.from_app_settings(settings, current_app.logger)
+    
+    result = exploration_service.generate_specification(session_id)
+    
+    if "error" in result:
+        return jsonify(result), 400
+    
+    return jsonify(result), 200
+
+
+@api_bp.route("/exploration/sessions/<session_id>/approve-exploration", methods=["POST"], strict_slashes=False)
+def approve_exploration(session_id: str) -> tuple[Response, int]:
+    """Approve or reject exploration summary."""
+    payload = request.get_json(silent=True) or {}
+    action = payload.get("action")
+    actor = payload.get("actor", "user")
+    feedback = payload.get("feedback", "")
+    
+    if action not in ["approve", "reject"]:
+        raise BadRequest("'action' must be 'approve' or 'reject'")
+    
+    settings = current_app.config["SETTINGS"]
+    exploration_service = ExplorationService.from_app_settings(settings, current_app.logger)
+    
+    result = exploration_service.approve_exploration(session_id, action, actor, feedback)
+    
+    if "error" in result:
+        return jsonify(result), 400
+    
+    return jsonify(result), 200
+
+
+@api_bp.route("/exploration/sessions/<session_id>/generate-scraper", methods=["POST"], strict_slashes=False)
+def generate_scraper(session_id: str) -> tuple[Response, int]:
+    """Generate scraper code from exploration."""
+    payload = request.get_json(silent=True) or {}
+    assertions = payload.get("assertions")
+    max_iterations = payload.get("max_iterations", 5)
+    
+    settings = current_app.config["SETTINGS"]
+    exploration_service = ExplorationService.from_app_settings(settings, current_app.logger)
+    
+    result = exploration_service.generate_scraper(session_id, assertions, max_iterations)
+    
+    if "error" in result:
+        return jsonify(result), 400
+    
+    return jsonify(result), 202
+
+
+@api_bp.route("/exploration/sessions/<session_id>/test-scraper", methods=["POST"], strict_slashes=False)
+def test_scraper(session_id: str) -> tuple[Response, int]:
+    """Test the generated scraper."""
+    payload = request.get_json(silent=True) or {}
+    assertions = payload.get("assertions")
+    
+    settings = current_app.config["SETTINGS"]
+    exploration_service = ExplorationService.from_app_settings(settings, current_app.logger)
+    
+    result = exploration_service.test_scraper(session_id, assertions)
+    
+    if "error" in result:
+        return jsonify(result), 400
+    
+    return jsonify(result), 202
+
+
+@api_bp.route("/exploration/sessions/<session_id>/approve-scraper", methods=["POST"], strict_slashes=False)
+def approve_scraper(session_id: str) -> tuple[Response, int]:
+    """Approve or reject generated scraper."""
+    payload = request.get_json(silent=True) or {}
+    action = payload.get("action")
+    actor = payload.get("actor", "user")
+    feedback = payload.get("feedback", "")
+    
+    if action not in ["approve", "reject"]:
+        raise BadRequest("'action' must be 'approve' or 'reject'")
+    
+    settings = current_app.config["SETTINGS"]
+    exploration_service = ExplorationService.from_app_settings(settings, current_app.logger)
+    
+    result = exploration_service.approve_scraper(session_id, action, actor, feedback)
+    
+    if "error" in result:
+        return jsonify(result), 400
+    
+    return jsonify(result), 200
+
+
+@api_bp.route("/exploration/sessions/<session_id>/scraper", methods=["GET"], strict_slashes=False)
+def get_scraper_details(session_id: str) -> tuple[Response, int]:
+    """Get current scraper details."""
+    settings = current_app.config["SETTINGS"]
+    exploration_service = ExplorationService.from_app_settings(settings, current_app.logger)
+    
+    result = exploration_service.get_scraper_details(session_id)
+    
+    if "error" in result:
+        return jsonify(result), 404
+    
+    return jsonify(result), 200
+
+
+@api_bp.route("/exploration/sessions/<session_id>/download", methods=["GET"], strict_slashes=False)
+def download_scraper_package(session_id: str) -> tuple[Response, int]:
+    """Download finalized scraper package."""
+    settings = current_app.config["SETTINGS"]
+    exploration_service = ExplorationService.from_app_settings(settings, current_app.logger)
+    
+    result = exploration_service.download_scraper_package(session_id)
+    
+    if "error" in result:
+        return jsonify(result), 400
+    
+    # Return zip file
+    from flask import send_file
+    import io
+    
+    package_bytes = result["package"]
+    return send_file(
+        io.BytesIO(package_bytes),
+        mimetype='application/zip',
+        as_attachment=True,
+        download_name=f"scraper_{session_id}.zip"
+    )
+
+
+@api_bp.route("/exploration/sessions/<session_id>/diffs", methods=["GET"], strict_slashes=False)
+def get_scraper_diffs(session_id: str) -> tuple[Response, int]:
+    """Get diffs between scraper iterations."""
+    settings = current_app.config["SETTINGS"]
+    exploration_service = ExplorationService.from_app_settings(settings, current_app.logger)
+    
+    result = exploration_service.get_scraper_diffs(session_id)
+    
+    if "error" in result:
+        return jsonify(result), 404
+    
+    return jsonify(result), 200
+
+
 @api_bp.route("/exploration/status", methods=["GET"], strict_slashes=False)
 def get_exploration_system_status() -> tuple[Response, int]:
     """Get overall exploration system status."""
@@ -282,6 +427,9 @@ def get_exploration_system_status() -> tuple[Response, int]:
             "screenshot_capture",
             "dom_analysis", 
             "chat_orchestration",
-            "structured_logging"
+            "structured_logging",
+            "code_generation",
+            "approval_pipeline",
+            "scraper_testing"
         ]
     }), 200
